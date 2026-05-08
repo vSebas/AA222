@@ -14,6 +14,9 @@ Note: Do not import any other modules here.
 '''
 import numpy as np
 
+def c_flat(c, x):
+    return np.asarray(c(x), dtype=float).reshape(-1)
+
 def descent_step(f, g, x, n, count):
     if count() >= n:
         return x, False
@@ -71,7 +74,7 @@ def objective(x, f, c, rho1, rho2, n, count):
     if count() + 2 > n:
         return np.inf
     
-    c_x = c(x)
+    c_x = c_flat(c, x)
     p_count = np.sum(c_x > 0.0)
     p_quad = np.sum(np.maximum(c_x, 0.0) ** 2)
     return f(x) + rho1 * p_count + rho2 * p_quad
@@ -81,7 +84,7 @@ def grad_objective(x, f, g, c, rho2, n, count):
         return None
 
     g_x = g(x)
-    c_x = c(x)
+    c_x = c_flat(c, x)
     m = np.maximum(c_x, 0.0)
 
     eps = 1e-6
@@ -89,7 +92,7 @@ def grad_objective(x, f, g, c, rho2, n, count):
     for j in range(len(x)):
         x_eps = x.copy()
         x_eps[j] += eps
-        grad_c[:, j] = (c(x_eps) - c_x) / eps
+        grad_c[:, j] = (c_flat(c, x_eps) - c_x) / eps
 
     return g_x + 2.0 * rho2 * (grad_c.T @ m)
 
@@ -101,12 +104,12 @@ def penalty_method(x0, f, g, c, n, count, rho1=1.0, rho2=10.0, gamma=4.0):
     while count() + 8 + len(x) <= n:
         x, _, _, _ = minimize(x, lambda z:objective(z, f, c, rho1, rho2, n, count),
                                  lambda z:grad_objective(z, f, g, c, rho2, n, count),
-                                 n, count, max_steps=10)
+                                 n, count, max_steps=5)
 
         if count() + 1 > n:
             break
 
-        c_x = c(x)
+        c_x = c_flat(c, x)
         max_violation = np.max(np.maximum(c_x, 0.0))
         if max_violation < best_violation:
             best_x = x.copy()
@@ -144,3 +147,198 @@ def optimize(f, g, c, x0, n, count, prob):
     x_best = penalty_method(x0,f,g,c,n,count)
     
     return x_best
+
+
+def _plot_run(problem_cls, x0, rho1, rho2, gamma, outer_steps=10, inner_steps=1):
+    p = problem_cls()
+    p.nolimit()
+    x = x0.astype(float).copy()
+    x_history = [x.copy()]
+    f_history = [p.f(x)]
+    violation_history = [np.max(np.maximum(c_flat(p.c, x), 0.0))]
+
+    for _ in range(outer_steps):
+        x, _, _, _ = minimize(
+            x,
+            lambda z, rr1=rho1, rr2=rho2: objective(z, p.f, p.c, rr1, rr2, p.n, p.count),
+            lambda z, rr2=rho2: grad_objective(z, p.f, p.g, p.c, rr2, p.n, p.count),
+            p.n,
+            p.count,
+            max_steps=inner_steps,
+            record_history=True,
+        )
+
+        x_history.append(x.copy())
+        f_history.append(p.f(x))
+        violation_history.append(np.max(np.maximum(c_flat(p.c, x), 0.0)))
+
+        rho1 *= gamma
+        rho2 *= gamma
+
+    return np.array(x_history), np.array(f_history), np.array(violation_history)
+
+
+def _plot_grid(prob):
+    xs = np.linspace(-3.0, 3.0, 350)
+    ys = np.linspace(-3.0, 3.0, 350)
+    X, Y = np.meshgrid(xs, ys)
+
+    if prob == "simple1":
+        F = -X * Y + 2.0 / (3.0 * np.sqrt(3.0))
+        C1 = X + Y**2 - 1.0
+        C2 = -X - Y
+    elif prob == "simple2":
+        F = 100.0 * (Y - X**2) ** 2 + (1.0 - X) ** 2
+        C1 = (X - 1.0) ** 3 - Y + 1.0
+        C2 = X + Y - 2.0
+    else:
+        raise ValueError("Only simple1 and simple2 have 2D plotting grids.")
+
+    feasible = (C1 <= 0.0) & (C2 <= 0.0)
+    return X, Y, F, feasible
+
+
+def generate_plots(output_dir="readme_plots"):
+    import os
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from project2_py.helpers import Simple1, Simple2
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    starts = {
+        "simple1": [
+            np.array([1.6, 1.6]),
+            np.array([0.2, 1.4]),
+            np.array([1.2, 0.1]),
+        ],
+        "simple2": [
+            np.array([-1.5, 1.5]),
+            np.array([0.0, 0.0]),
+            np.array([1.6, -1.0]),
+        ],
+    }
+    problems = {
+        "simple1": Simple1,
+        "simple2": Simple2,
+    }
+    algorithms = {
+        "mixed": {
+            "label": "Mixed penalty",
+            "rho1": 1.0,
+            "rho2": 10.0,
+            "gamma": 4.0,
+        },
+        "quadratic": {
+            "label": "Quadratic penalty",
+            "rho1": 0.0,
+            "rho2": 10.0,
+            "gamma": 4.0,
+        },
+    }
+
+    all_paths = {}
+    for prob, problem_cls in problems.items():
+        X, Y, F, feasible = _plot_grid(prob)
+        all_paths[prob] = {}
+
+        for alg_key, alg in algorithms.items():
+            paths = []
+            f_values = []
+            violations = []
+
+            for x0 in starts[prob]:
+                x_history, f_history, violation_history = _plot_run(
+                    problem_cls,
+                    x0,
+                    alg["rho1"],
+                    alg["rho2"],
+                    alg["gamma"],
+                )
+                paths.append(x_history)
+                f_values.append(f_history)
+                violations.append(violation_history)
+
+            all_paths[prob][alg_key] = (paths, f_values, violations)
+
+            fig, ax = plt.subplots(figsize=(6, 5))
+            ax.contourf(
+                X,
+                Y,
+                feasible.astype(float),
+                levels=[-0.1, 0.5, 1.1],
+                colors=["white", "#d9ead3"],
+                alpha=0.75,
+            )
+            levels = np.linspace(np.nanpercentile(F, 5), np.nanpercentile(F, 90), 18)
+            ax.contour(X, Y, F, levels=levels, colors="0.35", linewidths=0.6)
+
+            for idx, x_history in enumerate(paths, start=1):
+                ax.plot(
+                    x_history[:, 0],
+                    x_history[:, 1],
+                    marker="o",
+                    markersize=2.8,
+                    linewidth=1.2,
+                    label=f"start {idx}",
+                )
+                ax.scatter(x_history[0, 0], x_history[0, 1], s=35, marker="s")
+                ax.scatter(x_history[-1, 0], x_history[-1, 1], s=45, marker="*")
+
+            ax.set_xlim(-3, 3)
+            ax.set_ylim(-3, 3)
+            ax.set_xlabel("$x_1$")
+            ax.set_ylabel("$x_2$")
+            ax.set_title(f"{prob}: {alg['label']}")
+            ax.legend(fontsize=8)
+            fig.tight_layout()
+            fig.savefig(f"{output_dir}/{prob}_{alg_key}_path.png", dpi=200)
+            plt.close(fig)
+
+    simple2_xlim = (0, 10)
+
+    for alg_key, alg in algorithms.items():
+        _, f_values, violations = all_paths["simple2"][alg_key]
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        for idx, f_history in enumerate(f_values, start=1):
+            ax.plot(
+                np.arange(len(f_history)),
+                f_history,
+                marker="o",
+                markersize=2.8,
+                linewidth=1.2,
+                label=f"start {idx}",
+            )
+        ax.set_xlabel("iteration")
+        ax.set_ylabel("$f(x)$")
+        ax.set_yscale("log")
+        ax.set_xlim(simple2_xlim)
+        ax.set_title(f"simple2 objective: {alg['label']}")
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        fig.savefig(f"{output_dir}/simple2_{alg_key}_objective.png", dpi=200)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        for idx, violation_history in enumerate(violations, start=1):
+            ax.plot(
+                np.arange(len(violation_history)),
+                violation_history,
+                marker="o",
+                markersize=2.8,
+                linewidth=1.2,
+                label=f"start {idx}",
+            )
+        ax.set_xlabel("iteration")
+        ax.set_ylabel("max constraint violation")
+        ax.set_yscale("symlog", linthresh=1e-8)
+        ax.set_xlim(simple2_xlim)
+        ax.set_title(f"simple2 violation: {alg['label']}")
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        fig.savefig(f"{output_dir}/simple2_{alg_key}_violation.png", dpi=200)
+        plt.close(fig)
+
+    return all_paths
