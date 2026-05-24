@@ -1,5 +1,18 @@
 import numpy as np
+import os
 from pathlib import Path
+
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
+os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
+os.environ.setdefault("JAX_ENABLE_X64", "True")
+
+import jax
+from jax import config
+config.update("jax_enable_x64", True)
+
+import jax.numpy as jnp
+import optimistix as optx
+from slsqp_jax import SLSQP, SLSQPConfig, ToleranceConfig
 
 ZONE_1 = np.array([5.0, 5.0])
 INNER_RADIUS = 1.5
@@ -55,6 +68,52 @@ def layout_score(x, n):
         return -np.inf
     return min_pairwise_distance(x, n)
 
+def jax_ineq_constraints(z, args):
+    n = args
+    points = z[:-1].reshape((n, 2))
+    p = z[-1]
+
+    d1 = jnp.linalg.norm(points - jnp.array(ZONE_1), axis=1)
+    d2 = jnp.linalg.norm(points - jnp.array(ZONE_2), axis=1)
+    d3 = jnp.linalg.norm(points - jnp.array(ZONE_3), axis=1)
+
+    constraints = [
+        d1 - INNER_RADIUS,
+        OUTER_RADIUS - d1,
+        d2 - EXCLUSION_RADIUS,
+        d3 - EXCLUSION_RADIUS,
+    ]
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            constraints.append(jnp.array([jnp.linalg.norm(points[i] - points[j]) - p]))
+
+    return jnp.concatenate(constraints)
+
+def jax_obj(z, args):
+    return -z[-1], None
+
+def refine_layout_jax(x0, n):
+    z = jnp.array(np.concatenate([x0.copy(), [min_pairwise_distance(x0, n)]]))
+    bounds = jnp.array([[1.0, 9.0]] * (2 * n) + [[0.0, 8.0]])
+    n_ineq = 4 * n + n * (n - 1) // 2
+
+    solver = SLSQP(
+        ineq_constraint_fn=jax_ineq_constraints,
+        n_ineq_constraints=n_ineq,
+        bounds=bounds,
+        config=SLSQPConfig(tolerance=ToleranceConfig(rtol=1e-8, atol=1e-8, max_steps=200)),
+    )
+
+    sol = optx.minimise(jax_obj, solver, z, args=n, has_aux=True, max_steps=200)
+
+    x = np.array(sol.value[:-1])
+    score = layout_score(x, n)
+    if score == -np.inf:
+        return x0, min_pairwise_distance(x0, n)
+
+    return x, score
+
 def cross_entropy(f, n, k_max, m=100, m_elite=10, rng=None):
     """
     f: objective function
@@ -96,17 +155,25 @@ def cross_entropy(f, n, k_max, m=100, m_elite=10, rng=None):
 
     return best_x, best_score
 
-def optimize_layout(n, restarts=5, k_max=30, m=350, m_elite=50, seed=0):
+def optimize_layout(n, restarts=5, k_max=30, m=350, m_elite=50, seed=0, verbose=True):
     rng = np.random.default_rng(seed)
     best_x = None
     best_score = -np.inf
     f = lambda x: layout_score(x, n)
 
-    for _ in range(restarts):
+    if verbose:
+        print(f"n={n}: optimizing layout", flush=True)
+
+    for i in range(restarts):
+        if verbose:
+            print(f"n={n}: CEM restart {i + 1}/{restarts} running", flush=True)
         x, score = cross_entropy(f, n, k_max, m, m_elite, rng)
+        x, score = refine_layout_jax(x, n)
         if score > best_score:
             best_x = x
             best_score = score
+        if verbose:
+            print(f"n={n}: CEM restart {i + 1}/{restarts} done, best={best_score:.6f}", flush=True)
 
     return best_x, best_score
 
@@ -118,12 +185,14 @@ def solve_task_1(output_csv=None):
     layouts = {}
 
     for n in range(2, 11):
+        print(f"starting n={n}", flush=True)
         x, score = optimize_layout(n, seed=100 + n)
         results.append((n, score))
         layouts[n] = x
-        print(f"n={n}, p*={score:.6f}", flush=True)
+        print(f"finished n={n}, p*={score:.6f}", flush=True)
 
     np.savetxt(output_csv, np.array(results), delimiter=",", fmt=["%d", "%.8f"])
+    print(f"saved results to {output_csv}", flush=True)
     return results, layouts
 
 def main():
