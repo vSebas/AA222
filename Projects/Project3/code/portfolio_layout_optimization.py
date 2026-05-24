@@ -105,7 +105,10 @@ def refine_layout_jax(x0, n):
         config=SLSQPConfig(tolerance=ToleranceConfig(rtol=1e-8, atol=1e-8, max_steps=200)),
     )
 
-    sol = optx.minimise(jax_obj, solver, z, args=n, has_aux=True, max_steps=200)
+    try:
+        sol = optx.minimise(jax_obj, solver, z, args=n, has_aux=True, max_steps=200)
+    except Exception:
+        return x0, min_pairwise_distance(x0, n)
 
     x = np.array(sol.value[:-1])
     score = layout_score(x, n)
@@ -113,6 +116,11 @@ def refine_layout_jax(x0, n):
         return x0, min_pairwise_distance(x0, n)
 
     return x, score
+
+def outer_circle_layout(n, phase):
+    angles = phase + np.arange(n) * 2.0 * np.pi / n
+    points = ZONE_1 + OUTER_RADIUS * np.column_stack([np.cos(angles), np.sin(angles)])
+    return points.reshape(2 * n)
 
 def cross_entropy(f, n, k_max, m=100, m_elite=10, rng=None):
     """
@@ -155,7 +163,7 @@ def cross_entropy(f, n, k_max, m=100, m_elite=10, rng=None):
 
     return best_x, best_score
 
-def optimize_layout(n, restarts=5, k_max=30, m=350, m_elite=50, seed=0, verbose=True):
+def optimize_layout(n, restarts=5, k_max=30, m=350, m_elite=50, seed=0, boundary_starts=24, verbose=True):
     rng = np.random.default_rng(seed)
     best_x = None
     best_score = -np.inf
@@ -163,6 +171,32 @@ def optimize_layout(n, restarts=5, k_max=30, m=350, m_elite=50, seed=0, verbose=
 
     if verbose:
         print(f"n={n}: optimizing layout", flush=True)
+
+    feasible_boundary_starts = 0
+    for i, phase in enumerate(np.linspace(0.0, 2.0 * np.pi, boundary_starts, endpoint=False)):
+        x0 = outer_circle_layout(n, phase)
+        if not np.all(feasible_points(x0.reshape(n, 2))):
+            continue
+
+        feasible_boundary_starts += 1
+        x, score = refine_layout_jax(x0, n)
+        if score > best_score:
+            best_x = x
+            best_score = score
+
+        if verbose:
+            print(
+                f"n={n}: boundary start {i + 1}/{boundary_starts}, "
+                f"feasible={feasible_boundary_starts}, best={best_score:.6f}",
+                flush=True,
+            )
+
+    if verbose:
+        print(
+            f"n={n}: boundary starts done "
+            f"({feasible_boundary_starts}/{boundary_starts} feasible), best={best_score:.6f}",
+            flush=True,
+        )
 
     for i in range(restarts):
         if verbose:
