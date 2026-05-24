@@ -45,6 +45,40 @@ def sample_feasible_points(rng, count):
 def random_feasible_layout(rng, n):
     return sample_feasible_points(rng, n).reshape(2 * n)
 
+def project_point(point, n_passes=5):
+    point = point.copy()
+    centers = (ZONE_2, ZONE_3)
+
+    for _ in range(n_passes):
+        direction = point - ZONE_1
+        distance = np.linalg.norm(direction)
+        if distance < 1e-12:
+            direction = np.array([1.0, 0.0])
+            distance = 1.0
+
+        if distance < INNER_RADIUS:
+            point = ZONE_1 + direction / distance * INNER_RADIUS
+        elif distance > OUTER_RADIUS:
+            point = ZONE_1 + direction / distance * OUTER_RADIUS
+
+        for center in centers:
+            direction = point - center
+            distance = np.linalg.norm(direction)
+            if distance < 1e-12:
+                direction = np.array([1.0, 0.0])
+                distance = 1.0
+            if distance < EXCLUSION_RADIUS:
+                point = center + direction / distance * EXCLUSION_RADIUS
+
+    return point
+
+def project_layout(x, n):
+    points = x.reshape(n, 2).copy()
+    valid = feasible_points(points)
+    for i in np.where(~valid)[0]:
+        points[i] = project_point(points[i])
+    return points.reshape(2 * n)
+
 def repair_layout(x, n, rng):
     points = x.reshape(n, 2).copy()
     valid = feasible_points(points)
@@ -163,7 +197,7 @@ def cross_entropy(f, n, k_max, m=100, m_elite=10, rng=None):
 
     return best_x, best_score
 
-def optimize_layout(n, restarts=5, k_max=30, m=350, m_elite=50, seed=0, boundary_starts=24, verbose=True):
+def optimize_layout(n, restarts=5, k_max=30, m=350, m_elite=50, seed=0, boundary_starts=72, verbose=True):
     rng = np.random.default_rng(seed)
     best_x = None
     best_score = -np.inf
@@ -173,8 +207,16 @@ def optimize_layout(n, restarts=5, k_max=30, m=350, m_elite=50, seed=0, boundary
         print(f"n={n}: optimizing layout", flush=True)
 
     feasible_boundary_starts = 0
+    projected_boundary_starts = 0
     for i, phase in enumerate(np.linspace(0.0, 2.0 * np.pi, boundary_starts, endpoint=False)):
         x0 = outer_circle_layout(n, phase)
+        was_feasible = np.all(feasible_points(x0.reshape(n, 2)))
+        if not was_feasible:
+            x0 = project_layout(x0, n)
+            if not np.all(feasible_points(x0.reshape(n, 2))):
+                continue
+            projected_boundary_starts += 1
+
         if not np.all(feasible_points(x0.reshape(n, 2))):
             continue
 
@@ -185,16 +227,18 @@ def optimize_layout(n, restarts=5, k_max=30, m=350, m_elite=50, seed=0, boundary
             best_score = score
 
         if verbose:
+            status = "feasible" if was_feasible else "projected"
             print(
                 f"n={n}: boundary start {i + 1}/{boundary_starts}, "
-                f"feasible={feasible_boundary_starts}, best={best_score:.6f}",
+                f"{status}, accepted={feasible_boundary_starts}, best={best_score:.6f}",
                 flush=True,
             )
 
     if verbose:
         print(
             f"n={n}: boundary starts done "
-            f"({feasible_boundary_starts}/{boundary_starts} feasible), best={best_score:.6f}",
+            f"({feasible_boundary_starts}/{boundary_starts} accepted, "
+            f"{projected_boundary_starts} projected), best={best_score:.6f}",
             flush=True,
         )
 
