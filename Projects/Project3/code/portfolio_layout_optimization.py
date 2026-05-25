@@ -1,23 +1,12 @@
 import numpy as np
-import os
 from pathlib import Path
-
-os.environ.setdefault("JAX_PLATFORMS", "cpu")
-os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
-os.environ.setdefault("JAX_ENABLE_X64", "True")
-os.environ.setdefault("MPLCONFIGDIR", str(Path(__file__).with_name(".matplotlib")))
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 
-from jax import config
-config.update("jax_enable_x64", True)
-
-import jax.numpy as jnp
-import optimistix as optx
-from slsqp_jax import SLSQP, SLSQPConfig, ToleranceConfig
+from scipy.optimize import minimize
 
 ZONE_1 = np.array([5.0, 5.0])
 INNER_RADIUS = 1.5
@@ -102,14 +91,13 @@ def layout_score(x, n):
         return -np.inf
     return min_pairwise_distance(x, n)
 
-def jax_ineq_constraints(z, args):
-    n = args
+def slsqp_constraints(z, n):
     points = z[:-1].reshape((n, 2))
     p = z[-1]
 
-    d1 = jnp.linalg.norm(points - jnp.array(ZONE_1), axis=1)
-    d2 = jnp.linalg.norm(points - jnp.array(ZONE_2), axis=1)
-    d3 = jnp.linalg.norm(points - jnp.array(ZONE_3), axis=1)
+    d1 = np.linalg.norm(points - ZONE_1, axis=1)
+    d2 = np.linalg.norm(points - ZONE_2, axis=1)
+    d3 = np.linalg.norm(points - ZONE_3, axis=1)
 
     constraints = [
         d1 - INNER_RADIUS,
@@ -120,45 +108,40 @@ def jax_ineq_constraints(z, args):
 
     for i in range(n):
         for j in range(i + 1, n):
-            constraints.append(jnp.array([jnp.linalg.norm(points[i] - points[j]) - p]))
+            constraints.append([np.linalg.norm(points[i] - points[j]) - p])
 
-    return jnp.concatenate(constraints)
+    return np.concatenate(constraints)
 
-def jax_obj(z, args):
-    return -z[-1], None
+def slsqp_obj(z):
+    return -z[-1]
 
-def refine_layout_jax(x0, n, max_steps=100):
-    z = jnp.array(np.concatenate([x0.copy(), [min_pairwise_distance(x0, n)]]))
-    bounds = jnp.array([[1.0, 9.0]] * (2 * n) + [[0.0, 8.0]])
-    n_ineq = 4 * n + n * (n - 1) // 2
+def refine_layout_slsqp(x0, n, max_steps=100):
+    start_score = layout_score(x0, n)
+    if start_score == -np.inf:
+        return x0, -np.inf
 
-    solver = SLSQP(
-        ineq_constraint_fn=jax_ineq_constraints,
-        n_ineq_constraints=n_ineq,
+    z0 = np.concatenate([x0.copy(), [start_score]])
+    bounds = [(1.0, 9.0)] * (2 * n) + [(0.0, 8.0)]
+    result = minimize(
+        slsqp_obj,
+        z0,
+        method="SLSQP",
         bounds=bounds,
-        config=SLSQPConfig(tolerance=ToleranceConfig(rtol=1e-8, atol=1e-8, max_steps=max_steps)),
+        constraints={"type": "ineq", "fun": lambda z: slsqp_constraints(z, n)},
+        options={"maxiter": max_steps, "ftol": 1e-9, "disp": False},
     )
 
-    try:
-        sol = optx.minimise(jax_obj, solver, z, args=n, has_aux=True, max_steps=max_steps)
-    except Exception:
-        if layout_score(x0, n) == -np.inf:
-            return x0, -np.inf
-        return x0, min_pairwise_distance(x0, n)
+    if not result.success:
+        log(f"SLSQP failed: {result.message}; min_constraint={np.min(slsqp_constraints(result.x, n)):.3e}")
+        return x0, start_score
 
-    x = np.array(sol.value[:-1])
+    x = result.x[:-1]
     score = layout_score(x, n)
     if score == -np.inf:
-        if layout_score(x0, n) == -np.inf:
-            return x0, -np.inf
-        return x0, min_pairwise_distance(x0, n)
+        log(f"SLSQP returned infeasible layout; min_constraint={np.min(slsqp_constraints(result.x, n)):.3e}")
+        return x0, start_score
 
     return x, score
-
-def outer_circle_layout(n, phase):
-    angles = phase + np.arange(n) * 2.0 * np.pi / n
-    points = ZONE_1 + OUTER_RADIUS * np.column_stack([np.cos(angles), np.sin(angles)])
-    return points.reshape(2 * n)
 
 def circle_points(center, radius, count):
     angles = np.linspace(0.0, 2.0 * np.pi, count, endpoint=False)
@@ -195,34 +178,12 @@ def greedy_maxmin_layout(candidates, n, start_idx):
 
     return np.array(selected).reshape(2 * n)
 
-def improve_layout_by_swaps(layout, candidates, n, max_passes=4, trial_count=300):
-    selected = layout.reshape(n, 2).copy()
-    best_score = min_pairwise_distance(selected.reshape(2 * n), n)
-
-    for _ in range(max_passes):
-        improved = False
-        for i in range(n):
-            others = np.delete(selected, i, axis=0)
-            distances = np.linalg.norm(candidates[:, None, :] - others[None, :, :], axis=2)
-            candidate_scores = np.min(distances, axis=1)
-            trial_idx = np.argsort(candidate_scores)[-trial_count:]
-
-            for idx in trial_idx:
-                trial = selected.copy()
-                trial[i] = candidates[idx]
-                score = min_pairwise_distance(trial.reshape(2 * n), n)
-                if score > best_score:
-                    selected = trial
-                    best_score = score
-                    improved = True
-
-        if not improved:
-            break
-
-    return selected.reshape(2 * n)
-
-def greedy_candidate_layouts(rng, n, n_starts=8, use_swaps=True):
+def greedy_candidate_layouts(rng, n, n_starts=8, interior_anchor_fraction=0.8):
     candidates = boundary_candidate_points(rng)
+    interior = sample_feasible_points(rng, max(4 * n_starts, 1000))
+    interior_start = len(candidates)
+    candidates = np.vstack([candidates, interior])
+
     if len(candidates) < n:
         return []
 
@@ -232,13 +193,19 @@ def greedy_candidate_layouts(rng, n, n_starts=8, use_swaps=True):
         int(np.argmax(candidates[:, 1])),
         int(np.argmin(candidates[:, 1])),
     ]
-    anchors.extend(rng.choice(len(candidates), size=max(0, n_starts - len(anchors)), replace=False))
+    n_extra = max(0, n_starts - len(anchors))
+    n_interior = int(np.ceil(interior_anchor_fraction * n_extra))
+    n_global = n_extra - n_interior
+    interior_idx = np.arange(interior_start, len(candidates))
+
+    if n_interior:
+        anchors.extend(rng.choice(interior_idx, size=n_interior, replace=False))
+    if n_global:
+        anchors.extend(rng.choice(len(candidates), size=n_global, replace=False))
 
     layouts = []
     for start_idx in anchors[:n_starts]:
         layout = greedy_maxmin_layout(candidates, n, int(start_idx))
-        if use_swaps:
-            layout = improve_layout_by_swaps(layout, candidates, n)
         if np.all(feasible_points(layout.reshape(n, 2))):
             layouts.append(layout)
 
@@ -285,7 +252,7 @@ def cross_entropy(f, n, k_max, m=100, m_elite=10, rng=None):
 
     return best_x, best_score
 
-def cma_es(f, n, k_max, m=100, m_elite=None, rng=None, sigma0=2.0):
+def cma_es(f, n, k_max, m=100, m_elite=None, rng=None, sigma0=2.0, x0=None):
     dim = 2 * n
     m_elite = m // 2 if m_elite is None else m_elite
 
@@ -302,7 +269,7 @@ def cma_es(f, n, k_max, m=100, m_elite=None, rng=None, sigma0=2.0):
         2.0 * (mu_eff - 2.0 + 1.0 / mu_eff) / ((dim + 2.0) ** 2 + mu_eff),
     )
 
-    mean = random_feasible_layout(rng, n)
+    mean = random_feasible_layout(rng, n) if x0 is None else x0.copy()
     sigma = sigma0
     C = np.eye(dim)
     p_c = np.zeros(dim)
@@ -354,96 +321,36 @@ def cma_es(f, n, k_max, m=100, m_elite=None, rng=None, sigma0=2.0):
 
     return best_x, best_score
 
-def refine_top_layouts(
-    layouts,
-    n,
-    best_x,
-    best_score,
-    n_refines,
-    label,
-    slsqp_steps,
-    verbose=True,
-):
-    if not layouts or n_refines <= 0:
-        return best_x, best_score
+def refine_all_layouts(layouts, n, best_x, best_score, label, slsqp_steps, verbose=True):
+    for i, x0 in enumerate(layouts):
+        start_score = layout_score(x0, n)
+        if start_score == -np.inf:
+            continue
 
-    unique_layouts = []
-    seen = set()
-    for x in layouts:
-        points = np.round(x.reshape(n, 2), 5)
-        points = points[np.lexsort((points[:, 1], points[:, 0]))]
-        key = tuple(points.reshape(-1))
-        if key not in seen:
-            seen.add(key)
-            unique_layouts.append(x)
-
-    scored = [(layout_score(x, n), x) for x in unique_layouts]
-    scored = [(score, x) for score, x in scored if score != -np.inf]
-    scored.sort(key=lambda item: item[0], reverse=True)
-
-    n_used = min(n_refines, len(scored))
-    for i, (_, x0) in enumerate(scored[:n_used]):
-        x, score = refine_layout_jax(x0, n, slsqp_steps)
+        x, score = refine_layout_slsqp(x0, n, slsqp_steps)
         if score > best_score:
             best_x = x
             best_score = score
 
         if verbose:
-            log(f"n={n}: {label} refine {i + 1}/{n_used}, best={best_score:.6f}")
+            log(
+                f"n={n}: {label} refine {i + 1}/{len(layouts)}, "
+                f"start={start_score:.6f}, refined={score:.6f}, best={best_score:.6f}"
+            )
 
     return best_x, best_score
 
-def optimize_layout(
-    n,
-    restarts=2,
-    k_max=15,
-    m=120,
-    m_elite=30,
-    seed=0,
-    boundary_starts=8,
-    greedy_starts=4,
-    final_refines=100,
-    slsqp_steps=100,
-    verbose=True,
-):
+def optimize_layout(n,restarts,k_max,m,m_elite,seed,greedy_starts,slsqp_steps,
+                    verbose=True):
     rng = np.random.default_rng(seed)
     best_x = None
     best_score = -np.inf
     f = lambda x: layout_score(x, n)
     candidate_layouts = []
+    cma_layouts = []
 
     if verbose:
         log(f"n={n}: optimizing layout")
-
-    # Deterministic boundary candidates are cheap to score and often near active constraints.
-    feasible_boundary_starts = 0
-    projected_boundary_starts = 0
-    for i, phase in enumerate(np.linspace(0.0, 2.0 * np.pi, boundary_starts, endpoint=False)):
-        x0 = outer_circle_layout(n, phase)
-        was_feasible = np.all(feasible_points(x0.reshape(n, 2)))
-        if not was_feasible:
-            x0 = project_layout(x0, n)
-            projected_boundary_starts += 1
-
-        if not np.all(feasible_points(x0.reshape(n, 2))):
-            continue
-
-        feasible_boundary_starts += 1
-        candidate_layouts.append(x0)
-
-        if verbose:
-            status = "feasible" if was_feasible else "projected"
-            log(
-                f"n={n}: boundary start {i + 1}/{boundary_starts}, "
-                f"{status}, accepted={feasible_boundary_starts}",
-            )
-
-    if verbose:
-        log(
-            f"n={n}: boundary starts done "
-            f"({feasible_boundary_starts}/{boundary_starts} accepted, "
-            f"{projected_boundary_starts} projected)",
-        )
 
     # Greedy max-min candidates cover outer, inner, exclusion, and interior samples.
     if verbose:
@@ -453,25 +360,33 @@ def optimize_layout(
     if verbose:
         log(f"n={n}: greedy candidate starts generated ({len(greedy_layouts)})")
 
-    # CMA-ES provides stochastic global search; SLSQP is applied only to top candidates.
+    # Use the strongest deterministic candidates as CMA-ES starting means.
+    ranked_starts = sorted(
+        ((layout_score(x, n), x) for x in candidate_layouts),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+
     for i in range(restarts):
+        x0 = ranked_starts[i][1] if i < len(ranked_starts) else None
         if verbose:
-            log(f"n={n}: CMA-ES restart {i + 1}/{restarts} running")
-        x, score = cma_es(f, n, k_max, m, m_elite, rng)
+            source = "seeded" if x0 is not None else "random"
+            log(f"n={n}: CMA-ES restart {i + 1}/{restarts} running ({source})")
+        x, score = cma_es(f, n, k_max, m, m_elite, rng, x0=x0)
         candidate_layouts.append(x)
+        cma_layouts.append(x)
         if score > best_score:
             best_x = x
             best_score = score
         if verbose:
             log(f"n={n}: CMA-ES restart {i + 1}/{restarts} done, best={best_score:.6f}")
 
-    best_x, best_score = refine_top_layouts(
-        candidate_layouts,
+    best_x, best_score = refine_all_layouts(
+        cma_layouts,
         n,
         best_x,
         best_score,
-        final_refines,
-        "final SLSQP",
+        "CMA-ES SLSQP",
         slsqp_steps,
         verbose=verbose,
     )
@@ -548,18 +463,17 @@ def solve_task_1():
     } if output_csv.exists() else {}
 
     # target_ns = ((9,10))
-    target_ns = range(2, 8)
+    # target_ns = range(2, 8)
+    target_ns = (8,)
     results = [(n, existing[n]) for n in range(2, 11) if n in existing and n not in target_ns]
     layouts = {}
     
     args = dict(
-        restarts=3,
-        k_max=30,
-        m=350,
-        m_elite=50,
-        boundary_starts=36,
-        greedy_starts=100,
-        final_refines=5,
+        restarts=15,
+        k_max=51,
+        m=500,
+        m_elite=100,
+        greedy_starts=2000,
         slsqp_steps=200,
     )
 
