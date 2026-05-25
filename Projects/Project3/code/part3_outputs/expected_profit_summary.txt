@@ -1,0 +1,8 @@
+theory_n,10
+mean_n,6
+worst_n,5
+best_n,6
+theory_profit,1794194.4110817127
+mean_profit,1504529.1647777688
+worst_profit,1331508.3518918175
+best_profit,1692443.3746320577

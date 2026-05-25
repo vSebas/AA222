@@ -426,7 +426,7 @@ def save_distance_plot(results, output_dir):
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.plot(values[:, 0], values[:, 1], marker="o", color="black")
     ax.set_xlabel("Number of Stocks n")
-    ax.set_ylabel("Optimized Minimum Pairwise Distance p*")
+    ax.set_ylabel("Minimum Pairwise Distance p*")
     ax.set_title("Minimum Pairwise Distance vs Portfolio Size")
     ax.grid(True, alpha=0.3)
     ax.set_xticks(values[:, 0].astype(int))
@@ -464,7 +464,7 @@ def solve_task_1():
 
     # target_ns = ((9,10))
     # target_ns = range(2, 8)
-    target_ns = (8,)
+    target_ns = (9,)
     results = [(n, existing[n]) for n in range(2, 11) if n in existing and n not in target_ns]
     layouts = {}
     
