@@ -282,47 +282,6 @@ def fit_gp_predict(x_train, y_train, x_test):
     posterior_variance = np.maximum(np.diag(posterior_cov), np.finfo(float).eps)
 
     return posterior_mean, np.sqrt(posterior_variance)
-
-    def build_gp(output_dir):
-        x_train = np.array([2.5, 2.5, 4.5, 4.5, 6.5, 6.5, 8.0, 8.0])
-        y_train = np.array([0.59, 0.62, 0.82, 0.85, 0.86, 0.88, 0.90, 0.91])
-        x_test = np.linspace(1.0, 10.0, 500)
-
-        mean, std = fit_gp_predict(x_train, y_train, x_test)
-        theory = theoretical_efficiency(x_test)
-
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.fill_between(
-            x_test,
-            mean - 1.96 * std,
-            mean + 1.96 * std,
-            color="tab:blue",
-            alpha=0.18,
-            label="95% confidence region",
-        )
-        ax.plot(x_test, mean, color="tab:blue", linewidth=2.0, label="Predicted GP posterior mean")
-        ax.plot(x_test, theory, color="black", linestyle="-", linewidth=2.0, label="Theoretical efficiency over p")
-        ax.scatter(x_train, y_train, color="tab:red", s=20, zorder=5, label="Simulation data")
-        ax.set_xlabel("Separation distance p")
-        ax.set_ylabel("Diversification efficiency")
-        ax.set_title("Gaussian Process Fit to Realized Efficiency")
-        ax.set_xlim(1.0, 10.0)
-        ax.set_ylim(0.45, 1.05)
-        ax.legend()
-        fig.tight_layout()
-        fig.savefig(output_dir / "gp_efficiency_fit.png", dpi=200)
-        plt.close(fig)
-
-        predictions = np.column_stack([x_test, mean, std, mean - 1.96 * std, mean + 1.96 * std])
-        np.savetxt(
-            output_dir / "gp_efficiency_predictions.csv",
-            predictions,
-            delimiter=",",
-            header="p,mean,std,lower_95,upper_95",
-            comments="",
-        )
 \end{lstlisting}
 
 \newpage
@@ -341,15 +300,7 @@ Y_TRAIN = np.array([0.59, 0.62, 0.82, 0.85, 0.86, 0.88, 0.90, 0.91])
 def profit(n, efficiency):
     return n * efficiency * CAPITAL_PER_STOCK * ALPHA_PER_STOCK - n * COST_PER_STOCK
 
-def load_layout_results(path):
-    data = np.loadtxt(path, delimiter=",")
-    data = np.atleast_2d(data)
-    return data[:, 0].astype(int), data[:, 1]
-
-def save_profit_outputs(output_dir, image_dir=None):
-    base_dir = Path(__file__).resolve().parent
-    n_values, distances = load_layout_results(base_dir / "portfolio_layout_results.csv")
-
+def choose_portfolio_size(n_values, distances):
     gp_mean, gp_std = fit_gp_predict(X_TRAIN, Y_TRAIN, distances)
     gp_lower = gp_mean - 1.96 * gp_std
     gp_upper = gp_mean + 1.96 * gp_std
@@ -360,31 +311,4 @@ def save_profit_outputs(output_dir, image_dir=None):
     lower_profit = profit(n_values, gp_lower)
     upper_profit = profit(n_values, gp_upper)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    image_dir.mkdir(parents=True, exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.fill_between(
-        n_values,
-        lower_profit / 1e6,
-        upper_profit / 1e6,
-        color="tab:blue",
-        alpha=0.18,
-        label="95% confidence region",
-    )
-    ax.plot(n_values, mean_profit / 1e6, marker="o", color="tab:blue", linewidth=2.0, label="GP mean profit")
-    ax.plot(n_values, theory_profit / 1e6, marker="s", color="black", linewidth=1.8, label="Theoretical profit")
-    ax.plot(n_values, lower_profit / 1e6, linestyle="--", color="tab:blue", linewidth=1.2, label="95% lower bound")
-    ax.plot(n_values, upper_profit / 1e6, linestyle="--", color="tab:orange", linewidth=1.2, label="95% upper bound")
-    ax.set_xlabel("Number of stocks n")
-    ax.set_ylabel("Expected yearly profit (million USD)")
-    ax.set_title("Expected Profit vs. Portfolio Size")
-    ax.set_xticks(n_values)
-    ax.legend()
-    fig.tight_layout()
-
-    plot_path = output_dir / "expected_profit_vs_n.png"
-    fig.savefig(plot_path, dpi=200)
-    fig.savefig(image_dir / "expected_profit_vs_n.png", dpi=200)
-    plt.close(fig)
 \end{lstlisting}

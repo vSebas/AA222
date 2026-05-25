@@ -1,5 +1,5 @@
 # Fdb version 4
-["pdflatex"] 1779743509.50417 "/run/media/saveas/Secondary-Storage/Masters/AA222/Projects/Project3/latex/main.tex" "main.pdf" "main" 1779743511.38404 0
+["pdflatex"] 1779744026.67639 "/run/media/saveas/Secondary-Storage/Masters/AA222/Projects/Project3/latex/main.tex" "main.pdf" "main" 1779744028.42507 0
   "/run/media/saveas/Secondary-Storage/Masters/AA222/Projects/Project3/latex/main.tex" 1779742715.55274 1086 f7dfab29f07bb9779c30bb036e267dd8 ""
   "/usr/share/texmf-dist/fonts/enc/dvips/cm-super/cm-super-ts1.enc" 1775415801 2900 1537cc8184ad1792082cd229ecc269f4 ""
   "/usr/share/texmf-dist/fonts/tfm/jknappen/ec/tcrm1095.tfm" 1775415801 1536 02c06700a42be0f5a28664c7273f82e7 ""
@@ -110,10 +110,10 @@
   "img/layout_n7.png" 1779740050.1565 157726 d97572e837e1afc8a5288670129610f5 ""
   "img/minimum_distance_vs_n.png" 1779740050.16896 72748 c18bc769ab14261e5bae1dc4cce093fd ""
   "img/theoretical_efficiency_vs_distance.png" 1779740035.90158 81926 907b5220c1d0ee9632b6fcea2f18d9cb ""
-  "main.aux" 1779743511.31852 2480 166c1916eb718ef9112f76797d66a9ee "pdflatex"
-  "main.out" 1779743511.31922 1112 186f0508615003ffa014b8afc47bfaf8 "pdflatex"
+  "main.aux" 1779744028.36139 2480 5f38173403bb4951d072823906ddb0c8 "pdflatex"
+  "main.out" 1779744028.36219 1112 186f0508615003ffa014b8afc47bfaf8 "pdflatex"
   "main.tex" 1779742715.55274 1086 f7dfab29f07bb9779c30bb036e267dd8 ""
-  "problems/code.tex" 1779743509.30725 13875 73961ea70b05eec930f476def69887c0 ""
+  "problems/code.tex" 1779744027.00562 10757 30f28efa717afafcbc483410871e04f1 ""
   "problems/p1.tex" 1779743214.36453 2581 4e563b567d7efdf47747871c66baffdb ""
   "problems/p2.tex" 1779742237.68518 353 d0955c7f6007e3893f0ebd81643446b4 ""
   "problems/p3.tex" 1779742602.94149 2440 9d59b6048e6aa5795b0abaff509a9c6f ""

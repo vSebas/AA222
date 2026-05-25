@@ -464,7 +464,7 @@ def solve_task_1():
 
     # target_ns = ((9,10))
     # target_ns = range(2, 8)
-    target_ns = (9,)
+    target_ns = (10,)
     results = [(n, existing[n]) for n in range(2, 11) if n in existing and n not in target_ns]
     layouts = {}
     

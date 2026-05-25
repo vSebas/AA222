@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026/Arch Linux) (preloaded format=pdflatex 2026.4.22)  25 MAY 2026 14:11
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026/Arch Linux) (preloaded format=pdflatex 2026.4.22)  25 MAY 2026 14:20
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -521,7 +521,7 @@ File: img/expected_profit_vs_n.png Graphic file (type png)
 <use img/expected_profit_vs_n.png>
 Package pdftex.def Info: img/expected_profit_vs_n.png  used on input line 5.
 (pdftex.def)             Requested size: 422.77664pt x 264.23543pt.
-) [6{/usr/share/texmf-dist/fonts/enc/dvips/cm-super/cm-super-ts1.enc} <./img/expected_profit_vs_n.png>] (./problems/code.tex [7] [8] [9] [10] [11] [12] [13] [14]) [15] 
+) [6{/usr/share/texmf-dist/fonts/enc/dvips/cm-super/cm-super-ts1.enc} <./img/expected_profit_vs_n.png>] (./problems/code.tex [7] [8] [9] [10] [11] [12]) [13] 
 enddocument/afterlastpage (AED): lastpage setting LastPage.
 (./main.aux)
  ***********
@@ -532,18 +532,18 @@ Package rerunfilecheck Info: File `main.out' has not changed.
 (rerunfilecheck)             Checksum: 186F0508615003FFA014B8AFC47BFAF8;1112.
  ) 
 Here is how much of TeX's memory you used:
- 16038 strings out of 469515
- 247489 string characters out of 5470807
+ 15905 strings out of 469515
+ 245667 string characters out of 5470807
  1287914 words of memory out of 5000000
- 44092 multiletter control sequences out of 15000+600000
+ 44038 multiletter control sequences out of 15000+600000
  634564 words of font info for 66 fonts, out of 8000000 for 9000
  14 hyphenation exceptions out of 8191
  75i,12n,79p,615b,2167s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi8.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmr6.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmtt10.pfb></usr/share/texmf-dist/fonts/type1/public/cm-super/sfrm1095.pfb>
-Output written on main.pdf (15 pages, 905604 bytes).
+Output written on main.pdf (13 pages, 896646 bytes).
 PDF statistics:
- 641 PDF objects out of 1000 (max. 8388607)
- 586 compressed objects within 6 object streams
- 411 named destinations out of 1000 (max. 500000)
+ 540 PDF objects out of 1000 (max. 8388607)
+ 488 compressed objects within 5 object streams
+ 332 named destinations out of 1000 (max. 500000)
  92 words of extra memory for PDF output out of 10000 (max. 10000000)
 
