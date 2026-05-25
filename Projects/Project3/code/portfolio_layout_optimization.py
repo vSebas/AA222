@@ -12,7 +12,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 
-import jax
 from jax import config
 config.update("jax_enable_x64", True)
 
@@ -26,6 +25,12 @@ OUTER_RADIUS = 4.0
 ZONE_2 = np.array([7.5, 2.5])
 ZONE_3 = np.array([2.5, 7.5])
 EXCLUSION_RADIUS = 1.2
+LOG_FILE = Path(__file__).with_name("portfolio_layout_optimization.log")
+
+def log(message):
+    print(message, flush=True)
+    with LOG_FILE.open("a") as f:
+        f.write(message + "\n")
 
 def feasible_points(points):
     d_zone_1 = np.linalg.norm(points - ZONE_1, axis=1)
@@ -53,28 +58,22 @@ def random_feasible_layout(rng, n):
 
 def project_point(point, n_passes=5):
     point = point.copy()
-    centers = (ZONE_2, ZONE_3)
 
     for _ in range(n_passes):
-        direction = point - ZONE_1
-        distance = np.linalg.norm(direction)
-        if distance < 1e-12:
-            direction = np.array([1.0, 0.0])
-            distance = 1.0
-
-        if distance < INNER_RADIUS:
-            point = ZONE_1 + direction / distance * INNER_RADIUS
-        elif distance > OUTER_RADIUS:
-            point = ZONE_1 + direction / distance * OUTER_RADIUS
-
-        for center in centers:
+        for center, lower, upper in (
+            (ZONE_1, INNER_RADIUS, OUTER_RADIUS),
+            (ZONE_2, EXCLUSION_RADIUS, np.inf),
+            (ZONE_3, EXCLUSION_RADIUS, np.inf),
+        ):
             direction = point - center
             distance = np.linalg.norm(direction)
             if distance < 1e-12:
                 direction = np.array([1.0, 0.0])
                 distance = 1.0
-            if distance < EXCLUSION_RADIUS:
-                point = center + direction / distance * EXCLUSION_RADIUS
+            if distance < lower:
+                point = center + direction / distance * lower
+            elif distance > upper:
+                point = center + direction / distance * upper
 
     return point
 
@@ -93,14 +92,9 @@ def repair_layout(x, n, rng):
     return points.reshape(2 * n)
 
 def min_pairwise_distance(x, n=2):
-    pts = x.reshape(n, 2)
-    best = np.inf
-
-    for i in range(n):
-        for j in range(i + 1, n):
-            best = min(best, np.linalg.norm(pts[i] - pts[j]))
-
-    return best
+    points = x.reshape(n, 2)
+    i, j = np.triu_indices(n, k=1)
+    return np.min(np.linalg.norm(points[i] - points[j], axis=1))
 
 def layout_score(x, n):
     points = x.reshape(n, 2)
@@ -148,11 +142,15 @@ def refine_layout_jax(x0, n, max_steps=100):
     try:
         sol = optx.minimise(jax_obj, solver, z, args=n, has_aux=True, max_steps=max_steps)
     except Exception:
+        if layout_score(x0, n) == -np.inf:
+            return x0, -np.inf
         return x0, min_pairwise_distance(x0, n)
 
     x = np.array(sol.value[:-1])
     score = layout_score(x, n)
     if score == -np.inf:
+        if layout_score(x0, n) == -np.inf:
+            return x0, -np.inf
         return x0, min_pairwise_distance(x0, n)
 
     return x, score
@@ -166,18 +164,20 @@ def circle_points(center, radius, count):
     angles = np.linspace(0.0, 2.0 * np.pi, count, endpoint=False)
     return center + radius * np.column_stack([np.cos(angles), np.sin(angles)])
 
-def boundary_candidate_points(rng, points_per_circle=1000, interior_count=5000):
-    candidates = [
+def annulus_ring_points(n_rings=6, points_per_ring=240):
+    radii = np.linspace(INNER_RADIUS, OUTER_RADIUS, n_rings + 2)[1:-1]
+    return np.vstack([circle_points(ZONE_1, radius, points_per_ring) for radius in radii])
+
+def boundary_candidate_points(rng, points_per_circle=1000, interior_count=5000, n_rings=6, points_per_ring=240):
+    candidates = np.vstack([
         circle_points(ZONE_1, OUTER_RADIUS, points_per_circle),
         circle_points(ZONE_1, INNER_RADIUS, points_per_circle),
+        annulus_ring_points(n_rings, points_per_ring),
         circle_points(ZONE_2, EXCLUSION_RADIUS, points_per_circle),
         circle_points(ZONE_3, EXCLUSION_RADIUS, points_per_circle),
         sample_feasible_points(rng, interior_count),
-    ]
-
-    candidates = np.vstack(candidates)
-    candidates = candidates[feasible_points(candidates)]
-    return candidates
+    ])
+    return candidates[feasible_points(candidates)]
 
 def greedy_maxmin_layout(candidates, n, start_idx):
     selected = [candidates[start_idx]]
@@ -195,7 +195,33 @@ def greedy_maxmin_layout(candidates, n, start_idx):
 
     return np.array(selected).reshape(2 * n)
 
-def greedy_candidate_layouts(rng, n, n_starts=8):
+def improve_layout_by_swaps(layout, candidates, n, max_passes=4, trial_count=300):
+    selected = layout.reshape(n, 2).copy()
+    best_score = min_pairwise_distance(selected.reshape(2 * n), n)
+
+    for _ in range(max_passes):
+        improved = False
+        for i in range(n):
+            others = np.delete(selected, i, axis=0)
+            distances = np.linalg.norm(candidates[:, None, :] - others[None, :, :], axis=2)
+            candidate_scores = np.min(distances, axis=1)
+            trial_idx = np.argsort(candidate_scores)[-trial_count:]
+
+            for idx in trial_idx:
+                trial = selected.copy()
+                trial[i] = candidates[idx]
+                score = min_pairwise_distance(trial.reshape(2 * n), n)
+                if score > best_score:
+                    selected = trial
+                    best_score = score
+                    improved = True
+
+        if not improved:
+            break
+
+    return selected.reshape(2 * n)
+
+def greedy_candidate_layouts(rng, n, n_starts=8, use_swaps=True):
     candidates = boundary_candidate_points(rng)
     if len(candidates) < n:
         return []
@@ -206,12 +232,13 @@ def greedy_candidate_layouts(rng, n, n_starts=8):
         int(np.argmax(candidates[:, 1])),
         int(np.argmin(candidates[:, 1])),
     ]
-    if n_starts > len(anchors):
-        anchors.extend(rng.choice(len(candidates), size=n_starts - len(anchors), replace=False))
+    anchors.extend(rng.choice(len(candidates), size=max(0, n_starts - len(anchors)), replace=False))
 
     layouts = []
     for start_idx in anchors[:n_starts]:
         layout = greedy_maxmin_layout(candidates, n, int(start_idx))
+        if use_swaps:
+            layout = improve_layout_by_swaps(layout, candidates, n)
         if np.all(feasible_points(layout.reshape(n, 2))):
             layouts.append(layout)
 
@@ -327,21 +354,42 @@ def cma_es(f, n, k_max, m=100, m_elite=None, rng=None, sigma0=2.0):
 
     return best_x, best_score
 
-def refine_top_layouts(layouts, n, best_x, best_score, max_refines, label, slsqp_steps, verbose=True):
-    if not layouts or max_refines <= 0:
+def refine_top_layouts(
+    layouts,
+    n,
+    best_x,
+    best_score,
+    n_refines,
+    label,
+    slsqp_steps,
+    verbose=True,
+):
+    if not layouts or n_refines <= 0:
         return best_x, best_score
 
-    scored = [(layout_score(x, n), x) for x in layouts]
+    unique_layouts = []
+    seen = set()
+    for x in layouts:
+        points = np.round(x.reshape(n, 2), 5)
+        points = points[np.lexsort((points[:, 1], points[:, 0]))]
+        key = tuple(points.reshape(-1))
+        if key not in seen:
+            seen.add(key)
+            unique_layouts.append(x)
+
+    scored = [(layout_score(x, n), x) for x in unique_layouts]
     scored = [(score, x) for score, x in scored if score != -np.inf]
     scored.sort(key=lambda item: item[0], reverse=True)
 
-    for i, (_, x0) in enumerate(scored[:max_refines]):
+    n_used = min(n_refines, len(scored))
+    for i, (_, x0) in enumerate(scored[:n_used]):
         x, score = refine_layout_jax(x0, n, slsqp_steps)
         if score > best_score:
             best_x = x
             best_score = score
+
         if verbose:
-            print(f"n={n}: {label} refine {i + 1}/{min(max_refines, len(scored))}, best={best_score:.6f}", flush=True)
+            log(f"n={n}: {label} refine {i + 1}/{n_used}, best={best_score:.6f}")
 
     return best_x, best_score
 
@@ -354,7 +402,7 @@ def optimize_layout(
     seed=0,
     boundary_starts=8,
     greedy_starts=4,
-    final_refines=2,
+    final_refines=100,
     slsqp_steps=100,
     verbose=True,
 ):
@@ -365,7 +413,7 @@ def optimize_layout(
     candidate_layouts = []
 
     if verbose:
-        print(f"n={n}: optimizing layout", flush=True)
+        log(f"n={n}: optimizing layout")
 
     # Deterministic boundary candidates are cheap to score and often near active constraints.
     feasible_boundary_starts = 0
@@ -375,8 +423,6 @@ def optimize_layout(
         was_feasible = np.all(feasible_points(x0.reshape(n, 2)))
         if not was_feasible:
             x0 = project_layout(x0, n)
-            if not np.all(feasible_points(x0.reshape(n, 2))):
-                continue
             projected_boundary_starts += 1
 
         if not np.all(feasible_points(x0.reshape(n, 2))):
@@ -387,37 +433,37 @@ def optimize_layout(
 
         if verbose:
             status = "feasible" if was_feasible else "projected"
-            print(
+            log(
                 f"n={n}: boundary start {i + 1}/{boundary_starts}, "
                 f"{status}, accepted={feasible_boundary_starts}",
-                flush=True,
             )
 
     if verbose:
-        print(
+        log(
             f"n={n}: boundary starts done "
             f"({feasible_boundary_starts}/{boundary_starts} accepted, "
             f"{projected_boundary_starts} projected)",
-            flush=True,
         )
 
     # Greedy max-min candidates cover outer, inner, exclusion, and interior samples.
+    if verbose:
+        log(f"n={n}: starting greedy candidate generation ({greedy_starts} starts)")
     greedy_layouts = greedy_candidate_layouts(rng, n, greedy_starts)
     candidate_layouts.extend(greedy_layouts)
     if verbose:
-        print(f"n={n}: greedy candidate starts generated ({len(greedy_layouts)})", flush=True)
+        log(f"n={n}: greedy candidate starts generated ({len(greedy_layouts)})")
 
     # CMA-ES provides stochastic global search; SLSQP is applied only to top candidates.
     for i in range(restarts):
         if verbose:
-            print(f"n={n}: CMA-ES restart {i + 1}/{restarts} running", flush=True)
+            log(f"n={n}: CMA-ES restart {i + 1}/{restarts} running")
         x, score = cma_es(f, n, k_max, m, m_elite, rng)
         candidate_layouts.append(x)
         if score > best_score:
             best_x = x
             best_score = score
         if verbose:
-            print(f"n={n}: CMA-ES restart {i + 1}/{restarts} done, best={best_score:.6f}", flush=True)
+            log(f"n={n}: CMA-ES restart {i + 1}/{restarts} done, best={best_score:.6f}")
 
     best_x, best_score = refine_top_layouts(
         candidate_layouts,
@@ -427,7 +473,7 @@ def optimize_layout(
         final_refines,
         "final SLSQP",
         slsqp_steps,
-        verbose,
+        verbose=verbose,
     )
 
     return best_x, best_score
@@ -491,42 +537,49 @@ def save_part1_outputs(results, layouts, output_dir):
     save_distance_plot(results, output_dir)
     save_efficiency_csv(results, output_dir)
 
-def solve_task_1(output_csv=None, output_dir=None, optimizer_kwargs=None):
-    if output_csv is None:
-        output_csv = Path(__file__).with_name("portfolio_layout_results.csv")
-    if output_dir is None:
-        output_dir = Path(__file__).with_name("part1_outputs")
+def solve_task_1():
+    output_csv = Path(__file__).with_name("portfolio_layout_results.csv")
+    output_dir = Path(__file__).with_name("part1_outputs")
     output_dir = Path(output_dir)
 
-    results = []
+    existing = {
+        int(row[0]): float(row[1])
+        for row in np.atleast_2d(np.loadtxt(output_csv, delimiter=","))
+    } if output_csv.exists() else {}
+
+    # target_ns = ((9,10))
+    target_ns = range(2, 8)
+    results = [(n, existing[n]) for n in range(2, 11) if n in existing and n not in target_ns]
     layouts = {}
-    optimizer_kwargs = {} if optimizer_kwargs is None else optimizer_kwargs
-
-    for n in range(2, 11):
-        print(f"starting n={n}", flush=True)
-        x, score = optimize_layout(n, seed=100 + n, **optimizer_kwargs)
-        results.append((n, score))
-        layouts[n] = x
-        print(f"finished n={n}, p*={score:.6f}", flush=True)
-
-    np.savetxt(output_csv, np.array(results), delimiter=",", fmt=["%d", "%.8f"])
-    print(f"saved results to {output_csv}", flush=True)
-    save_part1_outputs(results, layouts, output_dir)
-    print(f"saved plots and efficiency results to {output_dir}", flush=True)
-    return results, layouts
-
-def main():
-    optimizer_kwargs = dict(
-        restarts=5,
+    
+    args = dict(
+        restarts=3,
         k_max=30,
         m=350,
         m_elite=50,
-        boundary_starts=24,
-        greedy_starts=8,
-        final_refines=4,
-        slsqp_steps=150,
+        boundary_starts=36,
+        greedy_starts=100,
+        final_refines=5,
+        slsqp_steps=200,
     )
-    solve_task_1(optimizer_kwargs=optimizer_kwargs)
+
+    for n in target_ns:
+        log(f"starting n={n}")
+        x, score = optimize_layout(n, seed=100 + n, **args)
+        results.append((n, score))
+        layouts[n] = x
+        log(f"finished n={n}, p*={score:.6f}")
+
+    results.sort(key=lambda item: item[0])
+    np.savetxt(output_csv, np.array(results), delimiter=",", fmt=["%d", "%.8f"])
+    log(f"saved results to {output_csv}")
+    save_part1_outputs(results, layouts, output_dir)
+    log(f"saved plots and efficiency results to {output_dir}")
+    return results, layouts
+
+def main():
+    LOG_FILE.write_text("")
+    solve_task_1()
 
 if __name__ == "__main__":
     main()
